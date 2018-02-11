@@ -4,7 +4,7 @@
 require "json"
 require "shellwords"
 
-ISSUES_REPO = ENV.fetch('DANGER_ISSUES_REPO', 'saberespoder/inboundsms').freeze
+ISSUES_REPO = ENV.fetch('DANGER_ISSUES_REPO', 'b1ake/the645app').freeze
 
 added_lines = github.pr_diff.split("\n").select{ |line| line =~ /^\+/ }.join("\n")
 
