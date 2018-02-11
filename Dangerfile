@@ -6,13 +6,6 @@ require "shellwords"
 
 ISSUES_REPO = ENV.fetch('DANGER_ISSUES_REPO', 'saberespoder/inboundsms').freeze
 
-$had_big_fail = false
-def big_fail(message)
-  # PR review in slack won't be requested if there was big fails
-  $had_big_fail = true
-  fail message
-end
-
 added_lines = github.pr_diff.split("\n").select{ |line| line =~ /^\+/ }.join("\n")
 
 
@@ -21,14 +14,14 @@ is_wip = !!(github.pr_title =~ /\bWIP\b/i) || !!(github.pr_labels.join =~ /work 
 warn("PR is classed as Work in Progress") if is_wip
 
 # Warn when there is a big PR
-warn("Big PR") if git.lines_of_code > 400
+warn("Big PR") if git.lines_of_code > 500
 
 # PR needs rebasing
-big_fail("PR can't be merged yet, rebase needed") unless github.pr_json["mergeable"]
+fail "PR can't be merged yet, rebase needed" unless github.pr_json["mergeable"]
 
 # Don't let testing shortcuts get into master by accident
-big_fail("fdescribe left in tests") if `grep -r fdescribe spec/ `.length > 1
-big_fail("fit left in tests") if `grep -r fit spec/ `.length > 1
+fail "fdescribe left in tests" if `grep -r fdescribe spec/ `.length > 1
+fail "fit left in tests" if `grep -r fit spec/ `.length > 1
 
 # Mainly to encourage writing up some reasoning about the PR
 fail "Please provide a summary in the Pull Request description" if github.pr_body.length < 5
@@ -56,17 +49,11 @@ if added_lines =~ /\bdefault_scope\b/
   big_fail "default_scope found. Please avoid this bad practice ([why is bad](http://stackoverflow.com/a/25087337))"
 end
 
-# We want to merge to master only from release branches
-if github.branch_for_base.eql?('master') && !(github.branch_for_head.start_with?('release_') || github.branch_for_head.start_with?('asap'))
-  fail 'Your trying to rebase into MASTER from non-release branch'
-end
-
 # Warn if 'Gemfile' was modified and 'Gemfile.lock' was not
 if git.modified_files.include?("Gemfile") && !git.modified_files.include?("Gemfile.lock")
   warn("`Gemfile` was modified but `Gemfile.lock` was not")
 end
 
-# See https://github.com/saberespoder/sep-danger/issues/5
 if added_lines =~ /render\s.*?(&&|and)\s*return/
   big_fail "Use `return render :foo` instead of render :foo && return"
 end
@@ -78,25 +65,11 @@ end
 
 # Look for timezone issues
 if `grep -r "Date.today\|DateTime.now\|Time.now" app spec lib`.length > 1
-  big_fail "Use explicit timezone -> https://github.com/saberespoder/officespace/blob/master/good_code.md#do-use"
+  big_fail "Use explicit timezone ([See this blog](http://danilenko.org/2012/7/6/rails_timezones/))"
 end
 
 # Encourage writing specs
 warn("You've added no specs for this change. Are you sure about this?") if git.modified_files.grep(/spec/).empty?
-
-# Code coverage metric
-if File.exist?('coverage/coverage.json')
-  simplecov.report 'coverage/coverage.json'
-else
-  fn = File.join(ENV.fetch('CIRCLE_ARTIFACTS', '.'), 'coverage/.last_run.json')
-  if File.exist?(fn)
-    coverage = JSON.parse(File.read(fn), symbolize_names: true)
-    percent = coverage[:result][:covered_percent]
-    message("Code coverage is at #{percent}%")
-  else
-    warn("Code coverage data not found") if `grep simplecov Gemfile`.length > 1
-  end
-end
 
 # Report failed tests
 tests_failed = false
@@ -144,28 +117,5 @@ linters.each do |linter|
     end
   end
 end
+
 message "Linters #{linters_no_errors.join(', ')} reported no errors"
-
-
-# Ask for reviews in slack
-if issue_number = github.branch_for_head[/^(\d+)_/, 1]
-  begin
-    issue_title = github.api.issue(ISSUES_REPO, issue_number).title
-  rescue
-    message "Can't find issue #{issue_number}"
-  else
-    markdown "Issue https://github.com/#{ISSUES_REPO}/issues/#{issue_number} (#{issue_title})"
-    unless is_wip || $had_big_fail || tests_failed || !!(github.pr_labels.join =~ /review requested/i)
-      pr_url = github.pr_json['html_url']
-      github.api.add_labels_to_an_issue(pr_url.split('/')[3..4].join('/'), pr_url.split('/')[6], ['review requested'])
-      payload = {
-        username: 'Review bot',
-        link_names: 1,
-        text: ["@here Review time!",
-               "Issue: https://github.com/#{ISSUES_REPO}/issues/#{issue_number} (#{issue_title})",
-               "PR: #{github.pr_json["html_url"]} (#{github.pr_title})"].join("\n")
-      }
-      system("curl -X POST --data-urlencode payload=#{payload.to_json.shellescape} '#{ENV["SLACK_REVIEW_WEBHOOK"]}'")
-    end
-  end
-end
